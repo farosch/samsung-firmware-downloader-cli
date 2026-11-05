@@ -151,7 +151,13 @@ def validated_url(url) -> str | None:
 
 
 def firmware_for(model: Model) -> list[Firmware]:
-    payload = fetch_json(DETAIL_URL.format(model=urllib.parse.quote(model.name, safe="")))
+    try:
+        payload = fetch_json(DETAIL_URL.format(model=urllib.parse.quote(model.name, safe="")))
+    except urllib.error.HTTPError as error:
+        # Many listed models have no product detail page; that means no firmware, not a failed scan.
+        if error.code == 404:
+            return []
+        raise
     if not isinstance(payload, list):
         return []
     found: dict[str, Firmware] = {}

@@ -3,6 +3,7 @@ import io
 import sys
 import tempfile
 import unittest
+import urllib.error
 from pathlib import Path
 from unittest.mock import patch
 
@@ -120,6 +121,27 @@ class DiscoveryTests(unittest.TestCase):
             items,
             [Firmware("HW-Q800F", "Upgrade File", "1102", "1 MB", "Firmware_USB.zip", FM_URL)],
         )
+
+    def test_firmware_for_treats_missing_detail_page_as_no_firmware(self):
+        missing = urllib.error.HTTPError("https://example.invalid", 404, "Not Found", None, None)
+        with patch.object(catalog, "fetch_json", side_effect=missing):
+            self.assertEqual(catalog.firmware_for(Model("MW8573G", "Microwave")), [])
+
+    def test_run_continues_past_a_model_without_a_detail_page(self):
+        def fake(url):
+            if "models.json" in url:
+                return [{"prdMdlName": "MW8573G", "displayName": "Microwave"},
+                        {"prdMdlName": "HW-Q800F", "displayName": "Soundbar"}]
+            if "MW8573G" in url:
+                raise urllib.error.HTTPError(url, 404, "Not Found", None, None)
+            return DETAIL
+
+        lines: list[str] = []
+        with patch.object(catalog, "fetch_json", side_effect=fake):
+            code = catalog.run("HW-Q800F", ask=lambda prompt: "", show=lines.append,
+                               directory=Path(tempfile.gettempdir()))
+        self.assertEqual(code, 0)
+        self.assertTrue(any("Firmware_USB.zip" in line for line in lines))
 
 
 class InteractiveTests(unittest.TestCase):

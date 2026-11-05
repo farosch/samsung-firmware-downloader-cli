@@ -18,4 +18,8 @@
   verified manifests should be generated from discovered entries.
 - The download-center listing pages return 403 to scripted clients, so only the
   `downloadUrl` values in product detail are used.
+- Many listed models have no product detail page (HTTP 404). They are skipped as
+  having no firmware, without a count. Investigate whether the label search is
+  returning non-firmware products and report skipped models.
 - allow to download a json list of downloads for all or a selection of branches/devices
+- 
