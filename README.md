@@ -19,7 +19,9 @@ python3 samsung-firmware-downloader.py --keyword soundbar --directory ~/firmware
 3. Firmware for each matching model is listed. Enter comma-separated numbers to
    download, or leave blank to skip.
 
-Downloads go to `./firmware/` by default and are never overwritten.
+Downloads go to `./firmware/` by default and are never overwritten. In a terminal, each
+download shows a status line with a progress bar, percent, bytes, speed, and ETA
+(the ETA needs a `Content-Length` from the server).
 
 Requires Python 3.10 or newer. It has no third-party dependencies.
 

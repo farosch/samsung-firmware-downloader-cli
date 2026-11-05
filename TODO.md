@@ -18,3 +18,4 @@
   verified manifests should be generated from discovered entries.
 - The download-center listing pages return 403 to scripted clients, so only the
   `downloadUrl` values in product detail are used.
+- allow to download a json list of downloads for all or a selection of branches/devices

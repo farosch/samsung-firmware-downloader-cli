@@ -210,6 +210,25 @@ class DownloadTests(unittest.TestCase):
                 again = catalog.download(firmware, Path(directory))
             self.assertEqual(again, target)
 
+    def test_download_writes_status_bar_when_given_a_stream(self):
+        firmware = Firmware("HW-Q800F", "Upgrade File", "1102", "1 MB", "Firmware_USB.zip", FM_URL)
+        status = io.StringIO()
+        with tempfile.TemporaryDirectory() as directory, \
+                patch.object(catalog.urllib.request, "urlopen", return_value=Response(b"abc")), \
+                contextlib.redirect_stdout(io.StringIO()):
+            catalog.download(firmware, Path(directory), status=status)
+        self.assertIn("100%", status.getvalue())
+        self.assertTrue(status.getvalue().endswith("\n"))
+
+    def test_download_writes_no_status_bar_by_default(self):
+        firmware = Firmware("HW-Q800F", "Upgrade File", "1102", "1 MB", "Firmware_USB.zip", FM_URL)
+        output = io.StringIO()
+        with tempfile.TemporaryDirectory() as directory, \
+                patch.object(catalog.urllib.request, "urlopen", return_value=Response(b"abc")), \
+                contextlib.redirect_stdout(output):
+            catalog.download(firmware, Path(directory))
+        self.assertNotIn("\r", output.getvalue())
+
     def test_download_rejects_length_mismatch_and_leaves_no_part_file(self):
         firmware = Firmware("HW-Q800F", "Upgrade File", "1102", "1 MB", "Firmware_USB.zip", FM_URL)
         with tempfile.TemporaryDirectory() as directory, \

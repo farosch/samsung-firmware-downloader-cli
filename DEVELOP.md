@@ -3,9 +3,13 @@
 ## Layout
 
 - `samsung_firmware/catalog.py`: all discovery, parsing, prompting, and download logic.
+- `samsung_firmware/progress.py`: download status line (`ProgressBar`, formatting helpers).
+  Redraws use `\r` plus `ESC[2K`, throttled to 0.1 s; `finish()` ends the line and is idempotent.
+  The bar is drawn only when stdout is a TTY.
 - `samsung-firmware-downloader.py`: thin entry script; the `pyproject.toml` script
   points at the same `main`.
-- `tests/test_catalog.py`: offline unit tests.
+- `tests/test_catalog.py`, `tests/test_progress.py`: offline unit tests.
+  Run with `python3 -m unittest discover -s tests -v`.
 
 ## Lookup flow
 

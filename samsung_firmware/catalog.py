@@ -16,7 +16,9 @@ import urllib.parse
 import urllib.request
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable
+from typing import Callable, TextIO
+
+from .progress import ProgressBar
 
 try:
     # Makes input() handle arrow keys and line editing instead of echoing escape codes.
@@ -175,7 +177,7 @@ def firmware_for(model: Model) -> list[Firmware]:
     return list(found.values())
 
 
-def download(firmware: Firmware, directory: Path) -> Path:
+def download(firmware: Firmware, directory: Path, status: TextIO | None = None) -> Path:
     if not re.fullmatch(r"[A-Za-z0-9._-]+", firmware.filename) or firmware.filename.startswith("."):
         raise ValueError(f"unsafe firmware filename: {firmware.filename!r}")
     directory.mkdir(parents=True, exist_ok=True)
@@ -185,6 +187,7 @@ def download(firmware: Firmware, directory: Path) -> Path:
         return target
     print(f"Downloading {firmware.filename} ({firmware.size or 'unknown size'})", flush=True)
     temporary: Path | None = None
+    bar: ProgressBar | None = None
     try:
         with tempfile.NamedTemporaryFile(
             dir=directory, prefix=firmware.filename + ".", suffix=".part", delete=False
@@ -195,10 +198,17 @@ def download(firmware: Firmware, directory: Path) -> Path:
                 if response.status != 200:
                     raise ValueError(f"{firmware.filename}: expected HTTP 200, got {response.status}")
                 declared = response.headers.get("Content-Length")
+                total = int(declared) if declared and declared.isdigit() else None
+                if status is not None:
+                    bar = ProgressBar(status, total)
                 received = 0
                 while chunk := response.read(CHUNK_SIZE):
                     received += len(chunk)
                     output.write(chunk)
+                    if bar is not None:
+                        bar.update(received)
+            if bar is not None:
+                bar.finish()
             if declared is not None and int(declared) != received:
                 raise ValueError(f"{firmware.filename}: received {received} bytes, expected {declared}")
         # NamedTemporaryFile is created 0600; publish with normal read permissions.
@@ -210,6 +220,8 @@ def download(firmware: Firmware, directory: Path) -> Path:
         print(f"Downloaded: {target}", flush=True)
         return target
     finally:
+        if bar is not None:
+            bar.finish()
         if temporary is not None:
             temporary.unlink(missing_ok=True)
 
@@ -279,7 +291,7 @@ def run(keyword: str | None, ask: Callable[[str], str], show: Callable[[str], No
             raise ValueError(f"invalid firmware number: {part!r}")
         chosen.add(int(part))
     for number in sorted(chosen):
-        download(firmware[number - 1], directory)
+        download(firmware[number - 1], directory, status=sys.stdout if sys.stdout.isatty() else None)
     return 0
 
 
