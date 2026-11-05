@@ -2,7 +2,7 @@
 
 Interactive command-line tool that searches Samsung's US support site and lists
 the firmware it publishes for matching models. It covers all support branches
-(phones, TVs, appliances, computing, and more), not only TVs.
+(phones, TVs, appliances, computing, and more).
 
 ## Usage
 
@@ -13,7 +13,9 @@ python3 samsung-firmware-downloader.py --keyword soundbar --directory ~/firmware
 ```
 
 1. Pick a branch number, or type a keyword (blank quits).
-2. Optionally pick a subcategory, which is searched by name.
+2. Optionally pick a subcategory. Its products are collected from the category
+   tree, and each product label is searched and the results are merged. A whole
+   branch can take a minute because each label is one request.
 3. Firmware for each matching model is listed. Enter comma-separated numbers to
    download, or leave blank to skip.
 
@@ -25,7 +27,10 @@ Requires Python 3.10 or newer. It has no third-party dependencies.
 
 - Samsung publishes firmware for only some models. Most TV and phone models
   returned no firmware in the probes so far (see [TODO.md](TODO.md)).
-- Keyword searches return at most 10 models.
+- A single keyword search returns at most 10 models. Branch and subcategory
+  selections avoid this by searching every product label, but a typed keyword
+  or `--keyword` is still limited to 10 models.
+- Label searches are fuzzy, so a list can include models from other products.
 - Downloads are checked only against the server's `Content-Length`; no SHA256 is
   pinned for discovered files.
 

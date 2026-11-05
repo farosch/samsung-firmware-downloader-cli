@@ -18,9 +18,16 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
 
+try:
+    # Makes input() handle arrow keys and line editing instead of echoing escape codes.
+    import readline  # noqa: F401
+except ImportError:  # Windows has no readline module.
+    pass
+
 SITE = "https://www.samsung.com/us"
 PICKER_URL = f"{SITE}/api/search/es_search/support/product_picker.json"
 SEARCH_URL = f"{SITE}/support/search/es_search/models.json"
+TAXONOMY_URL = f"{SITE}/api/search/es_search/support/contact_search/downloads.json"
 DETAIL_URL = f"{SITE}/api/support/product/detail/{{model}}.json"
 FIRMWARE_HOSTS = {"org.downloadcenter.samsung.com", "downloadcenter.samsung.com"}
 HEADERS = {"User-Agent": "Mozilla/5.0", "Accept": "application/json"}
@@ -32,6 +39,7 @@ CHUNK_SIZE = 1024 * 1024
 class Category:
     name: str
     children: tuple["Category", ...] = field(default_factory=tuple)
+    code: str = ""
 
 
 @dataclass(frozen=True)
@@ -63,8 +71,9 @@ def fetch_json(url: str):
 
 def _category(node: dict) -> Category:
     return Category(
-        str(node.get("name", "")).strip(),
-        tuple(_category(child) for child in node.get("child") or [] if isinstance(child, dict)),
+        name=str(node.get("name", "")).strip(),
+        children=tuple(_category(child) for child in node.get("child") or [] if isinstance(child, dict)),
+        code=str(node.get("id", "")).strip(),
     )
 
 
@@ -84,6 +93,43 @@ def search_models(keyword: str) -> list[Model]:
         if isinstance(item, dict) and item.get("prdMdlName"):
             name = str(item["prdMdlName"])
             models.setdefault(name, Model(name, str(item.get("displayName") or name)))
+    return list(models.values())
+
+
+def _leaf_labels(node: dict, labels: list[str]) -> None:
+    children = [child for child in node.get("child") or [] if isinstance(child, dict)]
+    if children:
+        for child in children:
+            _leaf_labels(child, labels)
+        return
+    label = str(node.get("supportLabel") or "").strip()
+    # Series labels such as "DW80N3030 Series" search better without the suffix.
+    if label.endswith(" Series"):
+        label = label[: -len(" Series")].strip()
+    if label:
+        labels.append(label)
+
+
+def taxonomy_labels(code: str) -> list[str]:
+    """Product labels under a category code. The taxonomy is not capped at 10 results."""
+    query = urllib.parse.urlencode({"taxonomyCode": code, "taxonomyFromLvl": 1, "taxonomyToLvl": 5})
+    payload = fetch_json(f"{TAXONOMY_URL}?{query}")
+    nodes = payload.get("response") if isinstance(payload, dict) else None
+    if not isinstance(nodes, list):
+        raise ValueError("unexpected taxonomy payload")
+    labels: list[str] = []
+    for node in nodes:
+        if isinstance(node, dict):
+            _leaf_labels(node, labels)
+    return list(dict.fromkeys(labels))
+
+
+def search_labels(labels: list[str]) -> list[Model]:
+    """Search each label and merge the results, since one search returns at most 10 models."""
+    models: dict[str, Model] = {}
+    for label in labels:
+        for model in search_models(label):
+            models.setdefault(model.name, model)
     return list(models.values())
 
 
@@ -168,7 +214,9 @@ def download(firmware: Firmware, directory: Path) -> Path:
             temporary.unlink(missing_ok=True)
 
 
-def pick_keyword(tree: list[Category], ask: Callable[[str], str], show: Callable[[str], None]) -> str | None:
+def pick_keyword(tree: list[Category], ask: Callable[[str], str],
+                 show: Callable[[str], None]) -> tuple[str, str] | None:
+    """Return (keyword, taxonomy code); the code is "" for typed keywords."""
     show("Branches:")
     for number, branch in enumerate(tree, 1):
         show(f"  {number}. {branch.name} ({len(branch.children)} subcategories)")
@@ -176,28 +224,36 @@ def pick_keyword(tree: list[Category], ask: Callable[[str], str], show: Callable
     if not answer:
         return None
     if not answer.isdigit() or not 1 <= int(answer) <= len(tree):
-        return answer
+        return answer, ""
     branch = tree[int(answer) - 1]
     if not branch.children:
-        return branch.name
+        return branch.name, branch.code
     show(f"Subcategories of {branch.name}:")
     for number, child in enumerate(branch.children, 1):
         show(f"  {number}. {child.name}")
     choice = ask("Subcategory number (blank for the whole branch): ").strip()
     if not choice:
-        return branch.name
+        return branch.name, branch.code
     if choice.isdigit() and 1 <= int(choice) <= len(branch.children):
-        return branch.children[int(choice) - 1].name
+        child = branch.children[int(choice) - 1]
+        return child.name, child.code
     show("Invalid subcategory.")
     return None
 
 
 def run(keyword: str | None, ask: Callable[[str], str], show: Callable[[str], None], directory: Path) -> int:
+    code = ""
     if keyword is None:
-        keyword = pick_keyword(parse_picker(fetch_json(PICKER_URL)), ask, show)
-        if not keyword:
+        selection = pick_keyword(parse_picker(fetch_json(PICKER_URL)), ask, show)
+        if not selection:
             return 0
-    models = search_models(keyword)
+        keyword, code = selection
+    labels = taxonomy_labels(code) if code else []
+    if labels:
+        show(f"Searching {len(labels)} product labels under {keyword!r}...")
+        models = search_labels(labels)
+    else:
+        models = search_models(keyword)
     if not models:
         show(f"No models found for {keyword!r}.")
         return 0
