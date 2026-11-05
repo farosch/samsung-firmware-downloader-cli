@@ -142,6 +142,7 @@ class DiscoveryTests(unittest.TestCase):
                                directory=Path(tempfile.gettempdir()))
         self.assertEqual(code, 0)
         self.assertTrue(any("Firmware_USB.zip" in line for line in lines))
+        self.assertFalse(any("[HW-Q800F]" in line and "Soundbar" in line for line in lines))
 
 
 class InteractiveTests(unittest.TestCase):

@@ -16,7 +16,8 @@ python3 samsung-firmware-downloader.py --keyword soundbar --directory ~/firmware
 2. Optionally pick a subcategory. Its products are collected from the category
    tree, and each product label is searched and the results are merged. A whole
    branch can take a minute because each label is one request.
-3. Firmware for each matching model is listed. Enter comma-separated numbers to
+3. Firmware for each matching model is listed (models without firmware are left out).
+   Enter comma-separated numbers to
    download, or leave blank to skip.
 
 Downloads go to `./firmware/` by default and are never overwritten. In a terminal, each

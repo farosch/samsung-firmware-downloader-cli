@@ -275,9 +275,7 @@ def run(keyword: str | None, ask: Callable[[str], str], show: Callable[[str], No
     if not models:
         show(f"No models found for {keyword!r}.")
         return 0
-    show(f"Models for {keyword!r}:")
-    for number, model in enumerate(models, 1):
-        show(f"  {number}. {model.display_name} [{model.name}]")
+    show(f"Checking {len(models)} models for firmware...")
     firmware: list[Firmware] = []
     for model in models:
         firmware.extend(firmware_for(model))
