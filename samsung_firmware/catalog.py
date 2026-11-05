@@ -18,6 +18,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, TextIO
 
+from . import __version__
 from .progress import ProgressBar
 
 try:
@@ -323,6 +324,7 @@ def browse(keyword: str, code: str, ask: Callable[[str], str], show: Callable[[s
 def main(argv: list[str] | None = None, ask: Callable[[str], str] = input,
          show: Callable[[str], None] = print) -> int:
     parser = argparse.ArgumentParser(prog="samsung-firmware-downloader", description=__doc__)
+    parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     parser.add_argument("--keyword", help="skip the branch menu and search this keyword")
     parser.add_argument("--directory", type=Path, default=Path("firmware"),
                         help="download directory (default: ./firmware)")

@@ -285,5 +285,14 @@ class DownloadTests(unittest.TestCase):
             catalog.download(firmware, Path("/tmp"))
 
 
+class VersionTests(unittest.TestCase):
+    def test_version_flag_prints_package_version_and_exits(self):
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output), self.assertRaises(SystemExit) as exit_info:
+            catalog.main(["--version"])
+        self.assertEqual(exit_info.exception.code, 0)
+        self.assertIn(catalog.__version__, output.getvalue())
+
+
 if __name__ == "__main__":
     unittest.main()
