@@ -32,6 +32,13 @@
 6. Only HTTPS URLs on `org.downloadcenter.samsung.com` or
    `downloadcenter.samsung.com` are accepted.
 
+## Control flow
+
+`run()` loops. Each pass picks a branch/subcategory or keyword (`pick_keyword`),
+then `browse()` searches, lists firmware, and downloads the chosen items. Blank
+answers at the firmware prompt return to the menu, and a blank menu answer quits.
+Per-download errors and invalid firmware numbers are reported and re-prompted, not raised.
+
 ## Download safety
 
 - Filenames must match `[A-Za-z0-9._-]+` and must not start with `.`.

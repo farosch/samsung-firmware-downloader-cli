@@ -17,8 +17,11 @@ python3 samsung-firmware-downloader.py --keyword soundbar --directory ~/firmware
    tree, and each product label is searched and the results are merged. A whole
    branch can take a minute because each label is one request.
 3. Firmware for each matching model is listed (models without firmware are left out).
-   Enter comma-separated numbers to
-   download, or leave blank to skip.
+   Enter comma-separated numbers to download. The script then returns to the branch
+   menu, so you can pick another branch or keyword. Leave the firmware prompt blank to
+   go back to the menu, and leave the menu blank to quit. A failed download or an invalid
+   number is reported, and you are asked again. `--keyword` starts at the search instead of
+   the branch menu, and the script still returns to the menu afterwards.
 
 Downloads go to `./firmware/` by default and are never overwritten. In a terminal, each
 download shows a status line with a progress bar, percent, bytes, speed, and ETA

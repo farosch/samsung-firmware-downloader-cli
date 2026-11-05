@@ -123,7 +123,7 @@ class DiscoveryTests(unittest.TestCase):
         )
 
     def test_firmware_for_treats_missing_detail_page_as_no_firmware(self):
-        missing = urllib.error.HTTPError("https://example.invalid", 404, "Not Found", None, None)
+        missing = urllib.error.HTTPError("https://example.invalid", 404, "Not Found", None, io.BytesIO())
         with patch.object(catalog, "fetch_json", side_effect=missing):
             self.assertEqual(catalog.firmware_for(Model("MW8573G", "Microwave")), [])
 
@@ -133,7 +133,7 @@ class DiscoveryTests(unittest.TestCase):
                 return [{"prdMdlName": "MW8573G", "displayName": "Microwave"},
                         {"prdMdlName": "HW-Q800F", "displayName": "Soundbar"}]
             if "MW8573G" in url:
-                raise urllib.error.HTTPError(url, 404, "Not Found", None, None)
+                raise urllib.error.HTTPError(url, 404, "Not Found", None, io.BytesIO())
             return DETAIL
 
         lines: list[str] = []
@@ -154,7 +154,7 @@ class InteractiveTests(unittest.TestCase):
         return code, "\n".join(output)
 
     def test_branch_then_subcategory_lists_firmware_without_download(self):
-        code, text = self.run_main(["1", "2", ""])
+        code, text = self.run_main(["1", "2", "", ""])
         self.assertEqual(code, 0)
         self.assertIn("Washers", text)
         self.assertIn("Firmware_USB.zip", text)
@@ -170,7 +170,7 @@ class InteractiveTests(unittest.TestCase):
                 return [{"prdMdlName": "DW7933LRAWW", "displayName": "Dish B"}]
             return fake_fetch(url)
 
-        code, text = self.run_main(["1", "1", ""], fetch=fetch)
+        code, text = self.run_main(["1", "1", "", ""], fetch=fetch)
         self.assertEqual(code, 0)
         self.assertIn("N0002406", seen[1])
         self.assertIn("keyword=DW80N3030", seen[2])
@@ -187,7 +187,7 @@ class InteractiveTests(unittest.TestCase):
                 return {"response": []}
             return fake_fetch(url)
 
-        code, text = self.run_main(["1", "1", ""], fetch=fetch)
+        code, text = self.run_main(["1", "1", "", ""], fetch=fetch)
         self.assertEqual(code, 0)
         self.assertTrue(any("keyword=Dishwashers" in url for url in seen))
         self.assertIn("Firmware_USB.zip", text)
@@ -199,10 +199,9 @@ class InteractiveTests(unittest.TestCase):
             seen.append(url)
             return fake_fetch(url)
 
-        code, text = self.run_main([""], argv=["--keyword", "soundbar"], fetch=fetch)
-        self.assertEqual(code, 0)
-        self.assertNotIn(catalog.PICKER_URL, seen)
+        code, text = self.run_main(["", ""], argv=["--keyword", "soundbar"], fetch=fetch)
         self.assertIn("keyword=soundbar", seen[0])
+        self.assertEqual(code, 0)
         self.assertIn("Firmware_USB.zip", text)
 
     def test_blank_branch_answer_quits_without_model_search(self):
@@ -217,9 +216,29 @@ class InteractiveTests(unittest.TestCase):
         self.assertEqual(seen, [catalog.PICKER_URL])
         self.assertIn("Branches:", text)
 
-    def test_out_of_range_firmware_number_fails_without_downloading(self):
-        code, _ = self.run_main(["9"], argv=["--keyword", "soundbar"])
-        self.assertEqual(code, 1)
+    def test_invalid_firmware_number_asks_again_without_downloading(self):
+        with patch.object(catalog.urllib.request, "urlopen") as urlopen:
+            code, text = self.run_main(["9", "", ""], argv=["--keyword", "soundbar"])
+        self.assertEqual(code, 0)
+        urlopen.assert_not_called()
+        self.assertIn("Invalid firmware number", text)
+
+    def test_download_returns_to_branch_menu_instead_of_exiting(self):
+        with tempfile.TemporaryDirectory() as directory, \
+                patch.object(catalog.urllib.request, "urlopen", return_value=Response(b"abc")), \
+                contextlib.redirect_stdout(io.StringIO()):
+            code, text = self.run_main(["1", "2", "1", ""], argv=["--directory", directory])
+            self.assertTrue((Path(directory) / "Firmware_USB.zip").exists())
+        self.assertEqual(code, 0)
+        self.assertEqual(text.count("Branches:"), 2)
+
+    def test_failed_download_reports_error_and_returns_to_menu(self):
+        with tempfile.TemporaryDirectory() as directory, \
+                patch.object(catalog.urllib.request, "urlopen", side_effect=OSError("network down")):
+            code, text = self.run_main(["1", "2", "1", ""], argv=["--directory", directory])
+        self.assertEqual(code, 0)
+        self.assertIn("ERROR: network down", text)
+        self.assertEqual(text.count("Branches:"), 2)
 
 
 class DownloadTests(unittest.TestCase):
