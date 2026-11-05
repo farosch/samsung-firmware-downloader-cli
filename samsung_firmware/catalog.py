@@ -16,7 +16,10 @@ import urllib.parse
 import urllib.request
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable
+from typing import Callable, TextIO
+
+from . import __version__
+from .progress import ProgressBar
 
 try:
     # Makes input() handle arrow keys and line editing instead of echoing escape codes.
@@ -149,7 +152,13 @@ def validated_url(url) -> str | None:
 
 
 def firmware_for(model: Model) -> list[Firmware]:
-    payload = fetch_json(DETAIL_URL.format(model=urllib.parse.quote(model.name, safe="")))
+    try:
+        payload = fetch_json(DETAIL_URL.format(model=urllib.parse.quote(model.name, safe="")))
+    except urllib.error.HTTPError as error:
+        # Many listed models have no product detail page; that means no firmware, not a failed scan.
+        if error.code == 404:
+            return []
+        raise
     if not isinstance(payload, list):
         return []
     found: dict[str, Firmware] = {}
@@ -175,7 +184,7 @@ def firmware_for(model: Model) -> list[Firmware]:
     return list(found.values())
 
 
-def download(firmware: Firmware, directory: Path) -> Path:
+def download(firmware: Firmware, directory: Path, status: TextIO | None = None) -> Path:
     if not re.fullmatch(r"[A-Za-z0-9._-]+", firmware.filename) or firmware.filename.startswith("."):
         raise ValueError(f"unsafe firmware filename: {firmware.filename!r}")
     directory.mkdir(parents=True, exist_ok=True)
@@ -185,6 +194,7 @@ def download(firmware: Firmware, directory: Path) -> Path:
         return target
     print(f"Downloading {firmware.filename} ({firmware.size or 'unknown size'})", flush=True)
     temporary: Path | None = None
+    bar: ProgressBar | None = None
     try:
         with tempfile.NamedTemporaryFile(
             dir=directory, prefix=firmware.filename + ".", suffix=".part", delete=False
@@ -195,10 +205,17 @@ def download(firmware: Firmware, directory: Path) -> Path:
                 if response.status != 200:
                     raise ValueError(f"{firmware.filename}: expected HTTP 200, got {response.status}")
                 declared = response.headers.get("Content-Length")
+                total = int(declared) if declared and declared.isdigit() else None
+                if status is not None:
+                    bar = ProgressBar(status, total)
                 received = 0
                 while chunk := response.read(CHUNK_SIZE):
                     received += len(chunk)
                     output.write(chunk)
+                    if bar is not None:
+                        bar.update(received)
+            if bar is not None:
+                bar.finish()
             if declared is not None and int(declared) != received:
                 raise ValueError(f"{firmware.filename}: received {received} bytes, expected {declared}")
         # NamedTemporaryFile is created 0600; publish with normal read permissions.
@@ -210,6 +227,8 @@ def download(firmware: Firmware, directory: Path) -> Path:
         print(f"Downloaded: {target}", flush=True)
         return target
     finally:
+        if bar is not None:
+            bar.finish()
         if temporary is not None:
             temporary.unlink(missing_ok=True)
 
@@ -238,16 +257,36 @@ def pick_keyword(tree: list[Category], ask: Callable[[str], str],
         child = branch.children[int(choice) - 1]
         return child.name, child.code
     show("Invalid subcategory.")
-    return None
+    return pick_keyword(tree, ask, show)
 
 
 def run(keyword: str | None, ask: Callable[[str], str], show: Callable[[str], None], directory: Path) -> int:
-    code = ""
-    if keyword is None:
-        selection = pick_keyword(parse_picker(fetch_json(PICKER_URL)), ask, show)
-        if not selection:
-            return 0
-        keyword, code = selection
+    tree: list[Category] | None = None
+    while True:
+        code = ""
+        if keyword is None:
+            if tree is None:
+                tree = parse_picker(fetch_json(PICKER_URL))
+            selection = pick_keyword(tree, ask, show)
+            if selection is None:
+                return 0
+            keyword, code = selection
+        browse(keyword, code, ask, show, directory)
+        keyword = None
+
+
+def parse_firmware_numbers(answer: str, count: int) -> set[int] | None:
+    chosen: set[int] = set()
+    for part in answer.split(","):
+        part = part.strip()
+        if not part.isdigit() or not 1 <= int(part) <= count:
+            return None
+        chosen.add(int(part))
+    return chosen
+
+
+def browse(keyword: str, code: str, ask: Callable[[str], str], show: Callable[[str], None],
+           directory: Path) -> None:
     labels = taxonomy_labels(code) if code else []
     if labels:
         show(f"Searching {len(labels)} product labels under {keyword!r}...")
@@ -256,36 +295,36 @@ def run(keyword: str | None, ask: Callable[[str], str], show: Callable[[str], No
         models = search_models(keyword)
     if not models:
         show(f"No models found for {keyword!r}.")
-        return 0
-    show(f"Models for {keyword!r}:")
-    for number, model in enumerate(models, 1):
-        show(f"  {number}. {model.display_name} [{model.name}]")
+        return
+    show(f"Checking {len(models)} models for firmware...")
     firmware: list[Firmware] = []
     for model in models:
         firmware.extend(firmware_for(model))
     if not firmware:
         show("No firmware published for these models.")
-        return 0
+        return
     show("Firmware:")
     for number, item in enumerate(firmware, 1):
         show(f"  {number}. [{item.model}] {item.filename} v{item.version} {item.size}".rstrip())
-    selection = ask("Firmware numbers to download, comma-separated (blank to skip): ").strip()
-    if not selection:
-        return 0
-    chosen = set()
-    for part in selection.split(","):
-        part = part.strip()
-        if not part.isdigit() or not 1 <= int(part) <= len(firmware):
-            raise ValueError(f"invalid firmware number: {part!r}")
-        chosen.add(int(part))
+    while True:
+        answer = ask("Firmware numbers to download, comma-separated (blank for another branch or keyword): ").strip()
+        if not answer:
+            return
+        chosen = parse_firmware_numbers(answer, len(firmware))
+        if chosen is not None:
+            break
+        show(f"Invalid firmware number in {answer!r}; enter numbers from 1 to {len(firmware)}.")
     for number in sorted(chosen):
-        download(firmware[number - 1], directory)
-    return 0
+        try:
+            download(firmware[number - 1], directory, status=sys.stdout if sys.stdout.isatty() else None)
+        except (OSError, ValueError, urllib.error.URLError) as error:
+            show(f"ERROR: {error}")
 
 
 def main(argv: list[str] | None = None, ask: Callable[[str], str] = input,
          show: Callable[[str], None] = print) -> int:
     parser = argparse.ArgumentParser(prog="samsung-firmware-downloader", description=__doc__)
+    parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     parser.add_argument("--keyword", help="skip the branch menu and search this keyword")
     parser.add_argument("--directory", type=Path, default=Path("firmware"),
                         help="download directory (default: ./firmware)")

@@ -1,0 +1,125 @@
+name: Release
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+# Releases are created one at a time so two merges cannot compute the same version.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Run unit tests
+        run: python -m unittest discover -s tests
+
+  version:
+    needs: test
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.bump.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Compute next version
+        id: bump
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          last=$(git tag --list 'v*' --sort=-v:refname | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -n 1 || true)
+          if [ -z "$last" ]; then
+            version=0.1.0
+          else
+            IFS=. read -r major minor patch <<< "${last#v}"
+            labels=$(gh api "repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA/pulls" --jq '[.[].labels[].name] | join(" ")')
+            echo "Labels on merged PR(s): ${labels:-none}"
+            case " $labels " in
+              *" release:major "*) major=$((major + 1)); minor=0; patch=0 ;;
+              *" release:minor "*) minor=$((minor + 1)); patch=0 ;;
+              *) patch=$((patch + 1)) ;;
+            esac
+            version="$major.$minor.$patch"
+          fi
+          if git rev-parse -q --verify "refs/tags/v$version" > /dev/null; then
+            echo "Tag v$version already exists" >&2
+            exit 1
+          fi
+          echo "Next version: $version (previous: ${last:-none})"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: [test, version]
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - os: ubuntu-latest
+            asset: samsung-firmware-downloader-linux-x86_64
+          - os: macos-latest
+            asset: samsung-firmware-downloader-macos-arm64
+          - os: windows-latest
+            asset: samsung-firmware-downloader-windows-x64.exe
+    runs-on: ${{ matrix.os }}
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+      ASSET: ${{ matrix.asset }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Stamp version into the package
+        run: |
+          sed -i.bak "s/^__version__ = .*/__version__ = \"$VERSION\"/" samsung_firmware/__init__.py
+          sed -i.bak "s/^version = .*/version = \"$VERSION\"/" pyproject.toml
+      - name: Build one-file binary
+        run: |
+          python -m pip install "pyinstaller>=6.10,<7"
+          python -m PyInstaller --onefile --clean --name samsung-firmware-downloader samsung-firmware-downloader.py
+          mkdir -p release
+          mv dist/samsung-firmware-downloader* "release/$ASSET"
+      - name: Smoke test the binary
+        run: |
+          "./release/$ASSET" --version | grep -F "$VERSION"
+          "./release/$ASSET" --help > /dev/null
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset }}
+          path: release/${{ matrix.asset }}
+          if-no-files-found: error
+
+  release:
+    needs: [version, build]
+    runs-on: ubuntu-latest
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: samsung-firmware-downloader-*
+          merge-multiple: true
+          path: release-assets
+      - name: Create GitHub release
+        run: |
+          gh release create "v$VERSION" release-assets/* \
+            --target "$GITHUB_SHA" \
+            --title "v$VERSION" \
+            --generate-notes

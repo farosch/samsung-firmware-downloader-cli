@@ -6,6 +6,14 @@ the firmware it publishes for matching models. It covers all support branches
 
 ## Usage
 
+Prebuilt binaries for Linux, macOS (Apple Silicon), and Windows are attached to each
+[GitHub release](https://github.com/farosch/samsung-firmware-downloader-cli/releases).
+Run `./samsung-firmware-downloader-linux-x86_64 --version` to see which release you have.
+The binaries are not code-signed, so macOS Gatekeeper and Windows SmartScreen may warn
+on first run.
+
+Or run from source:
+
 ```sh
 python3 samsung-firmware-downloader.py                  # branch menu, then subcategory or keyword
 python3 samsung-firmware-downloader.py --keyword HW-Q800F
@@ -16,10 +24,16 @@ python3 samsung-firmware-downloader.py --keyword soundbar --directory ~/firmware
 2. Optionally pick a subcategory. Its products are collected from the category
    tree, and each product label is searched and the results are merged. A whole
    branch can take a minute because each label is one request.
-3. Firmware for each matching model is listed. Enter comma-separated numbers to
-   download, or leave blank to skip.
+3. Firmware for each matching model is listed (models without firmware are left out).
+   Enter comma-separated numbers to download. The script then returns to the branch
+   menu, so you can pick another branch or keyword. Leave the firmware prompt blank to
+   go back to the menu, and leave the menu blank to quit. A failed download or an invalid
+   number is reported, and you are asked again. `--keyword` starts at the search instead of
+   the branch menu, and the script still returns to the menu afterwards.
 
-Downloads go to `./firmware/` by default and are never overwritten.
+Downloads go to `./firmware/` by default and are never overwritten. In a terminal, each
+download shows a status line with a progress bar, percent, bytes, speed, and ETA
+(the ETA needs a `Content-Length` from the server).
 
 Requires Python 3.10 or newer. It has no third-party dependencies.
 

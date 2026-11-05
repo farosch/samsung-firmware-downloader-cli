@@ -3,6 +3,7 @@ import io
 import sys
 import tempfile
 import unittest
+import urllib.error
 from pathlib import Path
 from unittest.mock import patch
 
@@ -121,6 +122,28 @@ class DiscoveryTests(unittest.TestCase):
             [Firmware("HW-Q800F", "Upgrade File", "1102", "1 MB", "Firmware_USB.zip", FM_URL)],
         )
 
+    def test_firmware_for_treats_missing_detail_page_as_no_firmware(self):
+        missing = urllib.error.HTTPError("https://example.invalid", 404, "Not Found", None, io.BytesIO())
+        with patch.object(catalog, "fetch_json", side_effect=missing):
+            self.assertEqual(catalog.firmware_for(Model("MW8573G", "Microwave")), [])
+
+    def test_run_continues_past_a_model_without_a_detail_page(self):
+        def fake(url):
+            if "models.json" in url:
+                return [{"prdMdlName": "MW8573G", "displayName": "Microwave"},
+                        {"prdMdlName": "HW-Q800F", "displayName": "Soundbar"}]
+            if "MW8573G" in url:
+                raise urllib.error.HTTPError(url, 404, "Not Found", None, io.BytesIO())
+            return DETAIL
+
+        lines: list[str] = []
+        with patch.object(catalog, "fetch_json", side_effect=fake):
+            code = catalog.run("HW-Q800F", ask=lambda prompt: "", show=lines.append,
+                               directory=Path(tempfile.gettempdir()))
+        self.assertEqual(code, 0)
+        self.assertTrue(any("Firmware_USB.zip" in line for line in lines))
+        self.assertFalse(any("[HW-Q800F]" in line and "Soundbar" in line for line in lines))
+
 
 class InteractiveTests(unittest.TestCase):
     def run_main(self, answers, argv=None, fetch=None):
@@ -131,7 +154,7 @@ class InteractiveTests(unittest.TestCase):
         return code, "\n".join(output)
 
     def test_branch_then_subcategory_lists_firmware_without_download(self):
-        code, text = self.run_main(["1", "2", ""])
+        code, text = self.run_main(["1", "2", "", ""])
         self.assertEqual(code, 0)
         self.assertIn("Washers", text)
         self.assertIn("Firmware_USB.zip", text)
@@ -147,7 +170,7 @@ class InteractiveTests(unittest.TestCase):
                 return [{"prdMdlName": "DW7933LRAWW", "displayName": "Dish B"}]
             return fake_fetch(url)
 
-        code, text = self.run_main(["1", "1", ""], fetch=fetch)
+        code, text = self.run_main(["1", "1", "", ""], fetch=fetch)
         self.assertEqual(code, 0)
         self.assertIn("N0002406", seen[1])
         self.assertIn("keyword=DW80N3030", seen[2])
@@ -164,7 +187,7 @@ class InteractiveTests(unittest.TestCase):
                 return {"response": []}
             return fake_fetch(url)
 
-        code, text = self.run_main(["1", "1", ""], fetch=fetch)
+        code, text = self.run_main(["1", "1", "", ""], fetch=fetch)
         self.assertEqual(code, 0)
         self.assertTrue(any("keyword=Dishwashers" in url for url in seen))
         self.assertIn("Firmware_USB.zip", text)
@@ -176,10 +199,9 @@ class InteractiveTests(unittest.TestCase):
             seen.append(url)
             return fake_fetch(url)
 
-        code, text = self.run_main([""], argv=["--keyword", "soundbar"], fetch=fetch)
-        self.assertEqual(code, 0)
-        self.assertNotIn(catalog.PICKER_URL, seen)
+        code, text = self.run_main(["", ""], argv=["--keyword", "soundbar"], fetch=fetch)
         self.assertIn("keyword=soundbar", seen[0])
+        self.assertEqual(code, 0)
         self.assertIn("Firmware_USB.zip", text)
 
     def test_blank_branch_answer_quits_without_model_search(self):
@@ -194,9 +216,29 @@ class InteractiveTests(unittest.TestCase):
         self.assertEqual(seen, [catalog.PICKER_URL])
         self.assertIn("Branches:", text)
 
-    def test_out_of_range_firmware_number_fails_without_downloading(self):
-        code, _ = self.run_main(["9"], argv=["--keyword", "soundbar"])
-        self.assertEqual(code, 1)
+    def test_invalid_firmware_number_asks_again_without_downloading(self):
+        with patch.object(catalog.urllib.request, "urlopen") as urlopen:
+            code, text = self.run_main(["9", "", ""], argv=["--keyword", "soundbar"])
+        self.assertEqual(code, 0)
+        urlopen.assert_not_called()
+        self.assertIn("Invalid firmware number", text)
+
+    def test_download_returns_to_branch_menu_instead_of_exiting(self):
+        with tempfile.TemporaryDirectory() as directory, \
+                patch.object(catalog.urllib.request, "urlopen", return_value=Response(b"abc")), \
+                contextlib.redirect_stdout(io.StringIO()):
+            code, text = self.run_main(["1", "2", "1", ""], argv=["--directory", directory])
+            self.assertTrue((Path(directory) / "Firmware_USB.zip").exists())
+        self.assertEqual(code, 0)
+        self.assertEqual(text.count("Branches:"), 2)
+
+    def test_failed_download_reports_error_and_returns_to_menu(self):
+        with tempfile.TemporaryDirectory() as directory, \
+                patch.object(catalog.urllib.request, "urlopen", side_effect=OSError("network down")):
+            code, text = self.run_main(["1", "2", "1", ""], argv=["--directory", directory])
+        self.assertEqual(code, 0)
+        self.assertIn("ERROR: network down", text)
+        self.assertEqual(text.count("Branches:"), 2)
 
 
 class DownloadTests(unittest.TestCase):
@@ -210,6 +252,25 @@ class DownloadTests(unittest.TestCase):
                 again = catalog.download(firmware, Path(directory))
             self.assertEqual(again, target)
 
+    def test_download_writes_status_bar_when_given_a_stream(self):
+        firmware = Firmware("HW-Q800F", "Upgrade File", "1102", "1 MB", "Firmware_USB.zip", FM_URL)
+        status = io.StringIO()
+        with tempfile.TemporaryDirectory() as directory, \
+                patch.object(catalog.urllib.request, "urlopen", return_value=Response(b"abc")), \
+                contextlib.redirect_stdout(io.StringIO()):
+            catalog.download(firmware, Path(directory), status=status)
+        self.assertIn("100%", status.getvalue())
+        self.assertTrue(status.getvalue().endswith("\n"))
+
+    def test_download_writes_no_status_bar_by_default(self):
+        firmware = Firmware("HW-Q800F", "Upgrade File", "1102", "1 MB", "Firmware_USB.zip", FM_URL)
+        output = io.StringIO()
+        with tempfile.TemporaryDirectory() as directory, \
+                patch.object(catalog.urllib.request, "urlopen", return_value=Response(b"abc")), \
+                contextlib.redirect_stdout(output):
+            catalog.download(firmware, Path(directory))
+        self.assertNotIn("\r", output.getvalue())
+
     def test_download_rejects_length_mismatch_and_leaves_no_part_file(self):
         firmware = Firmware("HW-Q800F", "Upgrade File", "1102", "1 MB", "Firmware_USB.zip", FM_URL)
         with tempfile.TemporaryDirectory() as directory, \
@@ -222,6 +283,15 @@ class DownloadTests(unittest.TestCase):
         firmware = Firmware("M", "t", "", "", "../evil.zip", FM_URL)
         with self.assertRaises(ValueError):
             catalog.download(firmware, Path("/tmp"))
+
+
+class VersionTests(unittest.TestCase):
+    def test_version_flag_prints_package_version_and_exits(self):
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output), self.assertRaises(SystemExit) as exit_info:
+            catalog.main(["--version"])
+        self.assertEqual(exit_info.exception.code, 0)
+        self.assertIn(catalog.__version__, output.getvalue())
 
 
 if __name__ == "__main__":
