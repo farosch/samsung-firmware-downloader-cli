@@ -1,0 +1,9 @@
+[project]
+name = "samsung-firmware-downloader-cli"
+version = "0.1.0"
+description = "Search Samsung US support branches or keywords and download published firmware."
+requires-python = ">=3.10"
+dependencies = []
+
+[project.scripts]
+samsung-firmware-downloader = "samsung_firmware.catalog:main"

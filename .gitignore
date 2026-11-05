@@ -1,0 +1,4 @@
+firmware/
+__pycache__/
+*.py[cod]
+*.part
